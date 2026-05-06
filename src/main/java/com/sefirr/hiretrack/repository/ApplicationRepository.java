@@ -16,7 +16,7 @@ public interface ApplicationRepository extends JpaRepository<Application, UUID> 
     @Query("""
             SELECT a FROM Application a WHERE a.user.id = :userId
             AND (:status IS NULL OR a.status = :status)
-            AND (:company IS NULL OR LOWER(a.company) LIKE LOWER(CONCAT('%', :company, '%')))
+            AND (cast(:company as string) IS NULL OR LOWER(a.company) LIKE LOWER(CONCAT('%', cast(:company as string), '%')))
             AND (:remote IS NULL OR a.remote = :remote)
             AND (:from IS NULL OR a.appliedAt >= :from)
             AND (:to IS NULL OR a.appliedAt <= :to)
