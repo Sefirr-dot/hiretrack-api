@@ -26,6 +26,11 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,7 +43,7 @@ jobs:
           cache: maven
 
       - name: Build & run tests
-        run: ./mvnw verify
+        run: mvn verify
         env:
           DB_URL: jdbc:postgresql://localhost:5432/hiretrack_test
           DB_USERNAME: postgres
