@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: hiretrack_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build & run tests
+        run: ./mvnw verify
+        env:
+          DB_URL: jdbc:postgresql://localhost:5432/hiretrack_test
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          JWT_SECRET: dGVzdHNlY3JldGtleXRoYXRpc2xvbmdlbm91Z2hmb3Jtb2Nrcy0xMjM0NTY3ODk=
+          JWT_EXPIRATION_MS: 900000
+          JWT_REFRESH_EXPIRATION_MS: 604800000
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          MAIL_HOST: localhost
+          MAIL_PORT: 1025
+          MAIL_USERNAME: test@example.com
+          MAIL_PASSWORD: test
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: target/surefire-reports/
