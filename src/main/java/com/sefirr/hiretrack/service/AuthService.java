@@ -6,8 +6,8 @@ import com.sefirr.hiretrack.dto.response.AuthResponse;
 import com.sefirr.hiretrack.entity.RefreshToken;
 import com.sefirr.hiretrack.entity.User;
 import com.sefirr.hiretrack.enums.Role;
-import com.sefirr.hiretrack.exception.ResourceNotFoundException;
-import com.sefirr.hiretrack.exception.UnauthorizedException;
+import com.sefirr.hiretrack.exception.ConflictException;
+import com.sefirr.hiretrack.exception.InvalidTokenException;
 import com.sefirr.hiretrack.repository.RefreshTokenRepository;
 import com.sefirr.hiretrack.repository.UserRepository;
 import com.sefirr.hiretrack.security.JwtService;
@@ -19,11 +19,20 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.time.LocalDateTime;
+import java.util.Base64;
+import java.util.HexFormat;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
 public class AuthService {
+
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -36,73 +45,87 @@ public class AuthService {
 
     @Transactional
     public AuthResponse register(RegisterRequest request) {
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new IllegalArgumentException("Email already in use: " + request.getEmail());
+        String email = normalizeEmail(request.getEmail());
+        if (userRepository.existsByEmail(email)) {
+            throw new ConflictException("Email already in use: " + email);
         }
 
         User user = User.builder()
-                .email(request.getEmail())
+                .email(email)
                 .password(passwordEncoder.encode(request.getPassword()))
-                .fullName(request.getFullName())
+                .fullName(request.getFullName().trim())
                 .role(Role.USER)
                 .build();
 
         userRepository.save(user);
-
-        String accessToken = jwtService.generateAccessToken(user);
-        String refreshToken = saveRefreshToken(user);
-
-        return AuthResponse.of(accessToken, refreshToken, user.getEmail(), user.getFullName());
+        return issueTokens(user);
     }
 
     @Transactional
     public AuthResponse login(LoginRequest request) {
-        authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
-        );
+        String email = normalizeEmail(request.getEmail());
+        // Throws BadCredentialsException (-> 401) on wrong email/password
+        authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(email, request.getPassword()));
 
-        User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new InvalidTokenException("Invalid email or password"));
 
-        refreshTokenRepository.deleteByUserId(user.getId());
-
-        String accessToken = jwtService.generateAccessToken(user);
-        String refreshToken = saveRefreshToken(user);
-
-        return AuthResponse.of(accessToken, refreshToken, user.getEmail(), user.getFullName());
+        return issueTokens(user);
     }
 
+    /**
+     * Rotates the refresh token: the presented token is revoked and a new pair is issued.
+     */
     @Transactional
     public AuthResponse refresh(String refreshTokenValue) {
-        RefreshToken stored = refreshTokenRepository.findByToken(refreshTokenValue)
-                .orElseThrow(() -> new UnauthorizedException("Invalid refresh token"));
+        RefreshToken stored = refreshTokenRepository.findByToken(hash(refreshTokenValue))
+                .orElseThrow(() -> new InvalidTokenException("Invalid refresh token"));
+
+        refreshTokenRepository.delete(stored);
 
         if (stored.isExpired()) {
-            refreshTokenRepository.delete(stored);
-            throw new UnauthorizedException("Refresh token expired. Please log in again.");
+            throw new InvalidTokenException("Refresh token expired. Please log in again.");
         }
 
-        User user = stored.getUser();
-        String newAccessToken = jwtService.generateAccessToken(user);
-
-        return AuthResponse.of(newAccessToken, refreshTokenValue, user.getEmail(), user.getFullName());
+        return issueTokens(stored.getUser());
     }
 
     @Transactional
     public void logout(String refreshTokenValue) {
-        refreshTokenRepository.deleteByToken(refreshTokenValue);
+        refreshTokenRepository.deleteByToken(hash(refreshTokenValue));
     }
 
-    private String saveRefreshToken(User user) {
-        String tokenValue = jwtService.generateRefreshToken(user);
+    private AuthResponse issueTokens(User user) {
+        String accessToken = jwtService.generateAccessToken(user);
+        String refreshToken = createRefreshToken(user);
+        return AuthResponse.of(accessToken, refreshToken, user.getEmail(), user.getFullName());
+    }
 
-        RefreshToken refreshToken = RefreshToken.builder()
-                .token(tokenValue)
+    private String createRefreshToken(User user) {
+        byte[] bytes = new byte[48];
+        RANDOM.nextBytes(bytes);
+        String tokenValue = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+
+        // Only the hash is persisted, so a database leak does not expose usable tokens
+        refreshTokenRepository.save(RefreshToken.builder()
+                .token(hash(tokenValue))
                 .user(user)
-                .expiresAt(LocalDateTime.now().plusSeconds(refreshExpirationMs / 1000))
-                .build();
+                .expiresAt(LocalDateTime.now().plusNanos(refreshExpirationMs * 1_000_000))
+                .build());
 
-        refreshTokenRepository.save(refreshToken);
         return tokenValue;
+    }
+
+    private static String normalizeEmail(String email) {
+        return email.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static String hash(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
     }
 }

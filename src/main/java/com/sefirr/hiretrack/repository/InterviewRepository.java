@@ -11,10 +11,12 @@ import java.util.UUID;
 
 public interface InterviewRepository extends JpaRepository<Interview, UUID> {
 
-    List<Interview> findByApplicationId(UUID applicationId);
+    List<Interview> findByApplicationIdOrderByScheduledAtAsc(UUID applicationId);
 
     @Query("""
             SELECT i FROM Interview i
+            JOIN FETCH i.application a
+            JOIN FETCH a.user
             WHERE i.scheduledAt BETWEEN :from AND :to
             AND i.reminderSent = false
             """)

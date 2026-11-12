@@ -37,13 +37,13 @@ Every feature comes from a real need — I built this while actively job hunting
 
 | Feature | Details |
 |---|---|
-| **JWT Auth** | Access + refresh token rotation, stored revocation, BCrypt passwords |
+| **JWT Auth** | Short-lived JWT access tokens + opaque, rotating refresh tokens (stored hashed, revocable), BCrypt passwords |
 | **Application Tracking** | Full lifecycle: Applied → Phone Screen → Interview → Offer → Hired/Rejected |
 | **Interview Scheduling** | 6 types (HR, Technical, System Design, Cultural, Final, Other) |
-| **Email Reminders** | Quartz cron job sends Thymeleaf-templated HTML emails 24h before each interview |
+| **Email Reminders** | Hourly Quartz job emails a Thymeleaf HTML reminder for interviews in the next 24h (retried if sending fails, re-sent if rescheduled) |
 | **Statistics Dashboard** | Response rate, interview conversion, weekly timeline, funnel by stage |
 | **Document Storage** | Upload CVs/cover letters per application (PDF, DOCX, PNG, JPG — max 10MB) |
-| **Redis Caching** | All read-heavy endpoints cached; evicted on any write |
+| **Redis Caching** | Application lists and stats cached; evicted on any write; falls back to the DB if Redis is down |
 | **Pagination & Filters** | Filter by status, company, remote, date range |
 | **OpenAPI / Swagger UI** | Full API docs at `/swagger-ui.html` |
 | **CI/CD** | GitHub Actions pipeline with PostgreSQL service container |
@@ -80,7 +80,7 @@ Every feature comes from a real need — I built this while actively job hunting
 ```
 POST   /api/v1/auth/register     Register a new user
 POST   /api/v1/auth/login        Login, receive access + refresh token
-POST   /api/v1/auth/refresh      Exchange refresh token for new access token
+POST   /api/v1/auth/refresh      Exchange refresh token for a new token pair (old one is revoked)
 POST   /api/v1/auth/logout       Revoke refresh token
 ```
 
@@ -94,7 +94,7 @@ PATCH  /api/v1/applications/{id}/status              Update status only
 DELETE /api/v1/applications/{id}                     Delete
 ```
 
-**Query params:** `?page=0&size=10&status=APPLIED&company=Google&remote=true&from=2025-01-01&to=2025-12-31`
+**Query params:** `?page=0&size=10&status=APPLIED&company=Google&remote=true&from=2025-01-01&to=2025-12-31` (`size` max 100)
 
 ### Interviews
 ```
@@ -151,12 +151,13 @@ docker compose up -d
 
 The API will be available at `http://localhost:8080`.
 Swagger UI: `http://localhost:8080/swagger-ui.html`
+Reminder emails are caught by Mailpit: `http://localhost:8025` (unless you configure a real SMTP in `.env`).
 
 ### Run Locally
 
 ```bash
-# Start only PostgreSQL and Redis
-docker compose up -d postgres redis
+# Start only PostgreSQL, Redis and Mailpit
+docker compose up -d postgres redis mailpit
 
 # Set environment variables
 export DB_URL=jdbc:postgresql://localhost:5432/hiretrack
@@ -165,14 +166,17 @@ export DB_PASSWORD=your_password
 export JWT_SECRET=your_base64_secret
 # ... (see .env.example for all vars)
 
-./mvnw spring-boot:run
+mvn spring-boot:run
 ```
 
 ### Run Tests
 
 ```bash
-./mvnw test            # Unit tests only
-./mvnw verify          # All tests (requires Docker for Testcontainers)
+mvn test               # Unit tests (the context test is skipped when DB_URL is not set)
+
+# Full suite incl. Spring context against real PostgreSQL + Redis
+docker compose up -d postgres redis
+DB_URL=jdbc:postgresql://localhost:5432/hiretrack DB_USERNAME=postgres DB_PASSWORD=... JWT_SECRET=... mvn verify
 ```
 
 ---
@@ -210,7 +214,7 @@ src/main/java/com/sefirr/hiretrack/
 | Scheduler | Quartz |
 | Email | Spring Mail + Thymeleaf |
 | Docs | SpringDoc OpenAPI 3 (Swagger UI) |
-| Tests | JUnit 5 + Mockito + Testcontainers |
+| Tests | JUnit 5 + Mockito + AssertJ |
 | Build | Maven |
 | Infrastructure | Docker + Docker Compose |
 | CI | GitHub Actions |
@@ -221,10 +225,11 @@ src/main/java/com/sefirr/hiretrack/
 
 - Stateless JWT authentication (HS256)
 - Short-lived access tokens (15 min) + long-lived refresh tokens (7 days)
-- Refresh tokens stored in DB — real logout and revocation possible
+- Refresh tokens are opaque random values (not JWTs, so they can't be used as bearer tokens), stored as SHA-256 hashes and rotated on every use — real logout and revocation possible
+- Consistent JSON errors: 400 validation/malformed input, 401 unauthenticated, 403 not owner, 404, 409 conflict
 - BCrypt password hashing
 - Resource ownership enforced at the service layer on every request
-- File path traversal prevention in storage service
+- File uploads: type allow-list, on-disk extension derived from the content type (never the client filename), path traversal prevention, `nosniff` on downloads
 
 ---
 

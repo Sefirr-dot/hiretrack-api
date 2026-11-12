@@ -1,5 +1,6 @@
 package com.sefirr.hiretrack.storage;
 
+import com.sefirr.hiretrack.exception.InvalidFileException;
 import com.sefirr.hiretrack.exception.StorageException;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,23 +10,28 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.util.Set;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
 public class LocalStorageService implements StorageService {
 
-    private static final Set<String> ALLOWED_TYPES = Set.of(
-            "application/pdf",
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "image/png",
-            "image/jpeg"
+    /**
+     * Allowed content types and the extension used on disk. The extension comes from this map,
+     * never from the client's filename, so a file can't be smuggled in as e.g. ".html".
+     */
+    private static final Map<String, String> ALLOWED_TYPES = Map.of(
+            "application/pdf", ".pdf",
+            "application/msword", ".doc",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx",
+            "image/png", ".png",
+            "image/jpeg", ".jpg"
     );
 
     @Value("${storage.upload-dir:uploads/}")
@@ -35,7 +41,7 @@ public class LocalStorageService implements StorageService {
 
     @PostConstruct
     public void init() {
-        rootLocation = Paths.get(uploadDir);
+        rootLocation = Paths.get(uploadDir).toAbsolutePath().normalize();
         try {
             Files.createDirectories(rootLocation);
         } catch (IOException e) {
@@ -46,27 +52,20 @@ public class LocalStorageService implements StorageService {
     @Override
     public String store(MultipartFile file, String directory) {
         if (file.isEmpty()) {
-            throw new StorageException("Cannot store empty file");
+            throw new InvalidFileException("Cannot store empty file");
         }
-        if (!ALLOWED_TYPES.contains(file.getContentType())) {
-            throw new StorageException("File type not allowed: " + file.getContentType());
+        String extension = ALLOWED_TYPES.get(file.getContentType());
+        if (extension == null) {
+            throw new InvalidFileException("File type not allowed: " + file.getContentType()
+                    + ". Allowed: PDF, DOC, DOCX, PNG, JPG");
         }
-
-        String originalFilename = file.getOriginalFilename();
-        String extension = originalFilename != null && originalFilename.contains(".")
-                ? originalFilename.substring(originalFilename.lastIndexOf("."))
-                : "";
 
         String filename = UUID.randomUUID() + extension;
-        Path dest = rootLocation.resolve(directory).resolve(filename).normalize();
+        Path dest = resolveSafely(directory + "/" + filename);
 
-        if (!dest.startsWith(rootLocation)) {
-            throw new StorageException("Cannot store file outside designated directory");
-        }
-
-        try {
+        try (InputStream in = file.getInputStream()) {
             Files.createDirectories(dest.getParent());
-            Files.copy(file.getInputStream(), dest, StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
             throw new StorageException("Failed to store file", e);
         }
@@ -77,8 +76,7 @@ public class LocalStorageService implements StorageService {
     @Override
     public Resource load(String path) {
         try {
-            Path file = rootLocation.resolve(path).normalize();
-            Resource resource = new UrlResource(file.toUri());
+            Resource resource = new UrlResource(resolveSafely(path).toUri());
             if (resource.exists() && resource.isReadable()) {
                 return resource;
             }
@@ -91,10 +89,27 @@ public class LocalStorageService implements StorageService {
     @Override
     public void delete(String path) {
         try {
-            Path file = rootLocation.resolve(path).normalize();
+            Path file = resolveSafely(path);
             Files.deleteIfExists(file);
+            // Remove the per-application directory once it is empty
+            Path parent = file.getParent();
+            if (!parent.equals(rootLocation)) {
+                try (var entries = Files.list(parent)) {
+                    if (entries.findAny().isEmpty()) {
+                        Files.deleteIfExists(parent);
+                    }
+                }
+            }
         } catch (IOException e) {
             throw new StorageException("Could not delete file: " + path, e);
         }
+    }
+
+    private Path resolveSafely(String path) {
+        Path resolved = rootLocation.resolve(path).normalize();
+        if (!resolved.startsWith(rootLocation)) {
+            throw new StorageException("Path outside storage directory: " + path);
+        }
+        return resolved;
     }
 }

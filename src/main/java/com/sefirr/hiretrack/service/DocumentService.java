@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
@@ -21,10 +22,15 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class DocumentService {
 
+    private static final int MAX_FILENAME_LENGTH = 255;
+
     private final DocumentRepository documentRepository;
     private final ApplicationRepository applicationRepository;
     private final StorageService storageService;
 
+    public record DocumentDownload(Resource resource, String filename, String contentType) {}
+
+    @Transactional(readOnly = true)
     public List<DocumentResponse> getByApplication(UUID applicationId, UUID userId) {
         verifyOwnership(applicationId, userId);
         return documentRepository.findByApplicationId(applicationId)
@@ -36,32 +42,47 @@ public class DocumentService {
         Application app = verifyOwnership(applicationId, userId);
         String storagePath = storageService.store(file, applicationId.toString());
 
-        Document doc = Document.builder()
-                .application(app)
-                .filename(storagePath.substring(storagePath.lastIndexOf('/') + 1))
-                .originalFilename(file.getOriginalFilename())
-                .contentType(file.getContentType())
-                .sizeBytes(file.getSize())
-                .storagePath(storagePath)
-                .build();
-
-        return toResponse(documentRepository.save(doc));
+        try {
+            Document doc = Document.builder()
+                    .application(app)
+                    .filename(storagePath.substring(storagePath.lastIndexOf('/') + 1))
+                    .originalFilename(sanitizeFilename(file.getOriginalFilename()))
+                    .contentType(file.getContentType())
+                    .sizeBytes(file.getSize())
+                    .storagePath(storagePath)
+                    .build();
+            return toResponse(documentRepository.saveAndFlush(doc));
+        } catch (RuntimeException e) {
+            // Don't leave an orphan file on disk if the DB insert fails
+            storageService.delete(storagePath);
+            throw e;
+        }
     }
 
-    public Resource download(UUID documentId, UUID userId) {
-        Document doc = documentRepository.findById(documentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Document not found: " + documentId));
-        verifyOwnership(doc.getApplication().getId(), userId);
-        return storageService.load(doc.getStoragePath());
+    @Transactional(readOnly = true)
+    public DocumentDownload download(UUID documentId, UUID userId) {
+        Document doc = findOwned(documentId, userId);
+        return new DocumentDownload(
+                storageService.load(doc.getStoragePath()),
+                doc.getOriginalFilename(),
+                doc.getContentType()
+        );
     }
 
     @Transactional
     public void delete(UUID documentId, UUID userId) {
+        Document doc = findOwned(documentId, userId);
+        documentRepository.delete(doc);
+        documentRepository.flush();
+        // Only remove the file once the row is gone, so a DB failure can't leave a dangling row
+        storageService.delete(doc.getStoragePath());
+    }
+
+    private Document findOwned(UUID documentId, UUID userId) {
         Document doc = documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Document not found: " + documentId));
         verifyOwnership(doc.getApplication().getId(), userId);
-        storageService.delete(doc.getStoragePath());
-        documentRepository.delete(doc);
+        return doc;
     }
 
     private Application verifyOwnership(UUID applicationId, UUID userId) {
@@ -71,6 +92,20 @@ public class DocumentService {
             throw new UnauthorizedException("Access denied");
         }
         return app;
+    }
+
+    /** Strips any client-side path and caps the length to fit the column. */
+    private static String sanitizeFilename(String original) {
+        String name = StringUtils.getFilename(StringUtils.cleanPath(original == null ? "" : original.replace('\\', '/')));
+        if (!StringUtils.hasText(name)) {
+            name = "document";
+        }
+        if (name.length() > MAX_FILENAME_LENGTH) {
+            int dot = name.lastIndexOf('.');
+            String ext = dot > 0 && name.length() - dot <= 10 ? name.substring(dot) : "";
+            name = name.substring(0, MAX_FILENAME_LENGTH - ext.length()) + ext;
+        }
+        return name;
     }
 
     private DocumentResponse toResponse(Document d) {

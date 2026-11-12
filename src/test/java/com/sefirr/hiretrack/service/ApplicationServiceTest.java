@@ -3,6 +3,7 @@ package com.sefirr.hiretrack.service;
 import com.sefirr.hiretrack.dto.request.ApplicationRequest;
 import com.sefirr.hiretrack.dto.response.ApplicationResponse;
 import com.sefirr.hiretrack.entity.Application;
+import com.sefirr.hiretrack.entity.Document;
 import com.sefirr.hiretrack.entity.User;
 import com.sefirr.hiretrack.enums.ApplicationStatus;
 import com.sefirr.hiretrack.enums.Role;
@@ -10,6 +11,7 @@ import com.sefirr.hiretrack.exception.ResourceNotFoundException;
 import com.sefirr.hiretrack.exception.UnauthorizedException;
 import com.sefirr.hiretrack.repository.ApplicationRepository;
 import com.sefirr.hiretrack.repository.UserRepository;
+import com.sefirr.hiretrack.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +34,7 @@ class ApplicationServiceTest {
 
     @Mock ApplicationRepository applicationRepository;
     @Mock UserRepository userRepository;
+    @Mock StorageService storageService;
     @InjectMocks ApplicationService applicationService;
 
     private User owner;
@@ -104,5 +107,27 @@ class ApplicationServiceTest {
         applicationService.delete(application.getId(), owner.getId());
 
         verify(applicationRepository).delete(application);
+    }
+
+    @Test
+    void delete_alsoRemovesStoredFiles() {
+        application.getDocuments().add(Document.builder().storagePath("app/a.pdf").build());
+        application.getDocuments().add(Document.builder().storagePath("app/b.png").build());
+        when(applicationRepository.findById(application.getId())).thenReturn(Optional.of(application));
+
+        applicationService.delete(application.getId(), owner.getId());
+
+        verify(storageService).delete("app/a.pdf");
+        verify(storageService).delete("app/b.png");
+    }
+
+    @Test
+    void delete_throws403_andKeepsData_whenNotOwned() {
+        when(applicationRepository.findById(application.getId())).thenReturn(Optional.of(application));
+
+        assertThatThrownBy(() -> applicationService.delete(application.getId(), other.getId()))
+                .isInstanceOf(UnauthorizedException.class);
+        verify(applicationRepository, never()).delete(any());
+        verifyNoInteractions(storageService);
     }
 }

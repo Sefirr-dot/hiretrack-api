@@ -2,6 +2,7 @@ package com.sefirr.hiretrack.config;
 
 import com.sefirr.hiretrack.scheduler.InterviewReminderJob;
 import org.quartz.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -17,11 +18,14 @@ public class QuartzConfig {
     }
 
     @Bean
-    public Trigger interviewReminderTrigger(JobDetail interviewReminderJobDetail) {
+    public Trigger interviewReminderTrigger(
+            JobDetail interviewReminderJobDetail,
+            @Value("${app.reminders.cron:0 0 * * * ?}") String cron
+    ) {
         return TriggerBuilder.newTrigger()
                 .forJob(interviewReminderJobDetail)
                 .withIdentity("interviewReminderTrigger")
-                .withSchedule(CronScheduleBuilder.cronSchedule("0 0 * * * ?"))
+                .withSchedule(CronScheduleBuilder.cronSchedule(cron))
                 .build();
     }
 }

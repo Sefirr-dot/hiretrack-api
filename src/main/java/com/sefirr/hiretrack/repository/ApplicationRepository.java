@@ -9,18 +9,24 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 public interface ApplicationRepository extends JpaRepository<Application, UUID> {
 
-    @Query("""
+    interface StatusCount {
+        ApplicationStatus getStatus();
+        long getTotal();
+    }
+
+    @Query(value = """
             SELECT a FROM Application a WHERE a.user.id = :userId
             AND (:status IS NULL OR a.status = :status)
             AND (cast(:company as string) IS NULL OR LOWER(a.company) LIKE LOWER(CONCAT('%', cast(:company as string), '%')))
             AND (:remote IS NULL OR a.remote = :remote)
-            AND (:from IS NULL OR a.appliedAt >= :from)
-            AND (:to IS NULL OR a.appliedAt <= :to)
-            ORDER BY a.appliedAt DESC
+            AND (cast(:from as LocalDate) IS NULL OR a.appliedAt >= :from)
+            AND (cast(:to as LocalDate) IS NULL OR a.appliedAt <= :to)
+            ORDER BY a.appliedAt DESC, a.createdAt DESC
             """)
     Page<Application> findAllByUserIdWithFilters(
             @Param("userId") UUID userId,
@@ -32,16 +38,19 @@ public interface ApplicationRepository extends JpaRepository<Application, UUID> 
             Pageable pageable
     );
 
-    long countByUserIdAndStatus(UUID userId, ApplicationStatus status);
-
-    long countByUserId(UUID userId);
+    @Query("""
+            SELECT a.status AS status, COUNT(a) AS total
+            FROM Application a WHERE a.user.id = :userId
+            GROUP BY a.status
+            """)
+    List<StatusCount> countGroupedByStatus(@Param("userId") UUID userId);
 
     @Query("""
             SELECT a FROM Application a WHERE a.user.id = :userId
             AND a.appliedAt >= :from
             ORDER BY a.appliedAt ASC
             """)
-    java.util.List<Application> findByUserIdAndAppliedAtAfter(
+    List<Application> findByUserIdAndAppliedAtAfter(
             @Param("userId") UUID userId,
             @Param("from") LocalDate from
     );

@@ -12,12 +12,12 @@ spring:
       connection-timeout: 30000
 
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: validate
     show-sql: false
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
 
   flyway:
@@ -30,13 +30,16 @@ spring:
       port: ${REDIS_PORT:6379}
 
   mail:
-    host: ${MAIL_HOST}
-    port: ${MAIL_PORT}
-    username: ${MAIL_USERNAME}
-    password: ${MAIL_PASSWORD}
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
     properties:
-      mail.smtp.auth: true
-      mail.smtp.starttls.enable: true
+      mail.smtp.auth: ${MAIL_SMTP_AUTH:false}
+      mail.smtp.starttls.enable: ${MAIL_STARTTLS:false}
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
 
   servlet:
     multipart:
@@ -45,8 +48,6 @@ spring:
 
   cache:
     type: redis
-    redis:
-      time-to-live: 600000
 
 jwt:
   secret: ${JWT_SECRET}
@@ -55,6 +56,13 @@ jwt:
 
 storage:
   upload-dir: ${UPLOAD_DIR:uploads/}
+
+app:
+  reminders:
+    # Quartz cron (with seconds): hourly by default
+    cron: ${REMINDER_CRON:0 0 * * * ?}
+  mail:
+    from: ${MAIL_FROM:${MAIL_USERNAME:no-reply@hiretrack.local}}
 
 springdoc:
   swagger-ui:
@@ -72,8 +80,11 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+  health:
+    # An unreachable SMTP server must not mark the whole API as DOWN
+    mail:
+      enabled: false
 
 logging:
   level:
-    com.sefirr.hiretrack: DEBUG
-    org.springframework.security: INFO
+    com.sefirr.hiretrack: ${LOG_LEVEL:INFO}

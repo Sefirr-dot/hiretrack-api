@@ -1,6 +1,7 @@
 package com.sefirr.hiretrack.controller;
 
 import com.sefirr.hiretrack.dto.request.LoginRequest;
+import com.sefirr.hiretrack.dto.request.RefreshTokenRequest;
 import com.sefirr.hiretrack.dto.request.RegisterRequest;
 import com.sefirr.hiretrack.dto.response.AuthResponse;
 import com.sefirr.hiretrack.service.AuthService;
@@ -10,8 +11,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -35,15 +34,15 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
-    @Operation(summary = "Refresh access token")
-    public AuthResponse refresh(@RequestBody Map<String, String> body) {
-        return authService.refresh(body.get("refreshToken"));
+    @Operation(summary = "Exchange a refresh token for a new token pair (the old refresh token is revoked)")
+    public AuthResponse refresh(@Valid @RequestBody RefreshTokenRequest request) {
+        return authService.refresh(request.getRefreshToken());
     }
 
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @Operation(summary = "Logout (revoke refresh token)")
-    public void logout(@RequestBody Map<String, String> body) {
-        authService.logout(body.get("refreshToken"));
+    public void logout(@Valid @RequestBody RefreshTokenRequest request) {
+        authService.logout(request.getRefreshToken());
     }
 }

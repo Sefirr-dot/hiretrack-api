@@ -11,9 +11,10 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -35,8 +36,8 @@ public class ApplicationController {
     @Operation(summary = "List all applications with optional filters")
     public PageResponse<ApplicationResponse> getAll(
             @AuthenticationPrincipal User user,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(100) int size,
             @RequestParam(required = false) ApplicationStatus status,
             @RequestParam(required = false) String company,
             @RequestParam(required = false) Boolean remote,
@@ -45,7 +46,8 @@ public class ApplicationController {
     ) {
         return applicationService.getAll(
                 user.getId(),
-                PageRequest.of(page, size, Sort.by("appliedAt").descending()),
+                // Ordering (appliedAt DESC) is defined in the repository query
+                PageRequest.of(page, size),
                 status, company, remote, from, to
         );
     }

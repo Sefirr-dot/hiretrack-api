@@ -4,22 +4,27 @@ import com.sefirr.hiretrack.dto.request.ApplicationRequest;
 import com.sefirr.hiretrack.dto.request.StatusUpdateRequest;
 import com.sefirr.hiretrack.dto.response.ApplicationResponse;
 import com.sefirr.hiretrack.dto.response.PageResponse;
+import com.sefirr.hiretrack.config.CacheNames;
 import com.sefirr.hiretrack.entity.Application;
+import com.sefirr.hiretrack.entity.Document;
 import com.sefirr.hiretrack.entity.User;
 import com.sefirr.hiretrack.enums.ApplicationStatus;
 import com.sefirr.hiretrack.exception.ResourceNotFoundException;
 import com.sefirr.hiretrack.exception.UnauthorizedException;
 import com.sefirr.hiretrack.repository.ApplicationRepository;
 import com.sefirr.hiretrack.repository.UserRepository;
+import com.sefirr.hiretrack.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -28,8 +33,12 @@ public class ApplicationService {
 
     private final ApplicationRepository applicationRepository;
     private final UserRepository userRepository;
+    private final StorageService storageService;
 
-    @Cacheable(value = "applications", key = "#userId + ':' + #pageable.pageNumber + ':' + #status + ':' + #company + ':' + #remote")
+    // The key must include every argument that changes the result (page size, sort and date range included)
+    @Cacheable(cacheNames = CacheNames.APPLICATIONS,
+            key = "#userId + ':' + #pageable + ':' + #status + ':' + #company + ':' + #remote + ':' + #from + ':' + #to")
+    @Transactional(readOnly = true)
     public PageResponse<ApplicationResponse> getAll(
             UUID userId, Pageable pageable,
             ApplicationStatus status, String company,
@@ -41,11 +50,15 @@ public class ApplicationService {
         return PageResponse.of(page);
     }
 
+    @Transactional(readOnly = true)
     public ApplicationResponse getById(UUID id, UUID userId) {
         return toResponse(findOwned(id, userId));
     }
 
-    @CacheEvict(value = "applications", allEntries = true)
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheNames.APPLICATIONS, allEntries = true),
+            @CacheEvict(cacheNames = {CacheNames.STATS_SUMMARY, CacheNames.STATS_TIMELINE, CacheNames.STATS_FUNNEL}, key = "#userId")
+    })
     @Transactional
     public ApplicationResponse create(UUID userId, ApplicationRequest request) {
         User user = userRepository.getReferenceById(userId);
@@ -58,14 +71,17 @@ public class ApplicationService {
                 .salaryMin(request.getSalaryMin())
                 .salaryMax(request.getSalaryMax())
                 .location(request.getLocation())
-                .remote(request.getRemote() != null ? request.getRemote() : false)
+                .remote(Boolean.TRUE.equals(request.getRemote()))
                 .notes(request.getNotes())
                 .appliedAt(request.getAppliedAt())
                 .build();
         return toResponse(applicationRepository.save(app));
     }
 
-    @CacheEvict(value = "applications", allEntries = true)
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheNames.APPLICATIONS, allEntries = true),
+            @CacheEvict(cacheNames = {CacheNames.STATS_SUMMARY, CacheNames.STATS_TIMELINE, CacheNames.STATS_FUNNEL}, key = "#userId")
+    })
     @Transactional
     public ApplicationResponse update(UUID id, UUID userId, ApplicationRequest request) {
         Application app = findOwned(id, userId);
@@ -75,13 +91,16 @@ public class ApplicationService {
         app.setSalaryMin(request.getSalaryMin());
         app.setSalaryMax(request.getSalaryMax());
         app.setLocation(request.getLocation());
-        app.setRemote(request.getRemote() != null ? request.getRemote() : false);
+        app.setRemote(Boolean.TRUE.equals(request.getRemote()));
         app.setNotes(request.getNotes());
         app.setAppliedAt(request.getAppliedAt());
         return toResponse(applicationRepository.save(app));
     }
 
-    @CacheEvict(value = "applications", allEntries = true)
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheNames.APPLICATIONS, allEntries = true),
+            @CacheEvict(cacheNames = {CacheNames.STATS_SUMMARY, CacheNames.STATS_TIMELINE, CacheNames.STATS_FUNNEL}, key = "#userId")
+    })
     @Transactional
     public ApplicationResponse updateStatus(UUID id, UUID userId, StatusUpdateRequest request) {
         Application app = findOwned(id, userId);
@@ -89,11 +108,18 @@ public class ApplicationService {
         return toResponse(applicationRepository.save(app));
     }
 
-    @CacheEvict(value = "applications", allEntries = true)
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheNames.APPLICATIONS, allEntries = true),
+            @CacheEvict(cacheNames = {CacheNames.STATS_SUMMARY, CacheNames.STATS_TIMELINE, CacheNames.STATS_FUNNEL}, key = "#userId")
+    })
     @Transactional
     public void delete(UUID id, UUID userId) {
         Application app = findOwned(id, userId);
+        List<String> storedFiles = app.getDocuments().stream().map(Document::getStoragePath).toList();
         applicationRepository.delete(app);
+        applicationRepository.flush();
+        // Document rows are removed by cascade; the files on disk must be removed explicitly
+        storedFiles.forEach(storageService::delete);
     }
 
     private Application findOwned(UUID id, UUID userId) {

@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -16,6 +17,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
@@ -47,10 +49,15 @@ public class DocumentController {
     @GetMapping("/api/v1/documents/{id}/download")
     @Operation(summary = "Download a document")
     public ResponseEntity<Resource> download(@PathVariable UUID id, @AuthenticationPrincipal User user) {
-        Resource resource = documentService.download(id, user.getId());
+        DocumentService.DocumentDownload download = documentService.download(id, user.getId());
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
-                .body(resource);
+                .contentType(MediaType.parseMediaType(download.contentType()))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(download.filename(), StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .header("X-Content-Type-Options", "nosniff")
+                .body(download.resource());
     }
 
     @DeleteMapping("/api/v1/documents/{id}")

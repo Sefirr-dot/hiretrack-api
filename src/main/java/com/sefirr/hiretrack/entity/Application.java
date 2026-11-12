@@ -6,6 +6,7 @@ import lombok.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -57,11 +58,13 @@ public class Application {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Builder.Default
     @OneToMany(mappedBy = "application", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<Interview> interviews;
+    private List<Interview> interviews = new ArrayList<>();
 
+    @Builder.Default
     @OneToMany(mappedBy = "application", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<Document> documents;
+    private List<Document> documents = new ArrayList<>();
 
     @PrePersist
     void prePersist() {

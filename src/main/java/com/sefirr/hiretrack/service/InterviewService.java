@@ -22,9 +22,10 @@ public class InterviewService {
     private final InterviewRepository interviewRepository;
     private final ApplicationRepository applicationRepository;
 
+    @Transactional(readOnly = true)
     public List<InterviewResponse> getByApplication(UUID applicationId, UUID userId) {
         verifyApplicationOwnership(applicationId, userId);
-        return interviewRepository.findByApplicationId(applicationId)
+        return interviewRepository.findByApplicationIdOrderByScheduledAtAsc(applicationId)
                 .stream().map(this::toResponse).toList();
     }
 
@@ -39,6 +40,7 @@ public class InterviewService {
                 .platform(request.getPlatform())
                 .interviewerName(request.getInterviewerName())
                 .notes(request.getNotes())
+                .feedback(request.getFeedback())
                 .build();
         return toResponse(interviewRepository.save(interview));
     }
@@ -46,12 +48,17 @@ public class InterviewService {
     @Transactional
     public InterviewResponse update(UUID id, UUID userId, InterviewRequest request) {
         Interview interview = findOwned(id, userId);
+        if (!request.getScheduledAt().equals(interview.getScheduledAt())) {
+            // Rescheduled: the reminder must be sent again for the new date
+            interview.setReminderSent(false);
+        }
         interview.setType(request.getType());
         interview.setScheduledAt(request.getScheduledAt());
         interview.setDurationMinutes(request.getDurationMinutes());
         interview.setPlatform(request.getPlatform());
         interview.setInterviewerName(request.getInterviewerName());
         interview.setNotes(request.getNotes());
+        interview.setFeedback(request.getFeedback());
         return toResponse(interviewRepository.save(interview));
     }
 
